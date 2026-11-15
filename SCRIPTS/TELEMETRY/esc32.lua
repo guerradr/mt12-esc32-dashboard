@@ -69,7 +69,6 @@ local demoTick = 0
 local sensorList = {}     -- discovered telemetry sensors on radio
 local sensorIds = {}      -- cached EdgeTX field IDs per gauge
 
--- Precomputed 1-degree or 5-degree trig helper using math.rad/cos/sin
 local function degToRad(deg)
   return deg * 0.017453292519943295
 end
@@ -95,7 +94,6 @@ local function refreshSensors()
   sensorList = { "None" }
   local seen = { ["None"] = true }
 
-  -- Preferred ESCape32 FrSky D16v2 sensor names first
   local preferred = { "RPM", "Curr", "VFAS", "Tmp1", "Tmp2", "Temp", "RxBt", "A2", "EscT", "BECV" }
   for i = 1, #preferred do
     local name = preferred[i]
@@ -106,11 +104,9 @@ local function refreshSensors()
     end
   end
 
-  -- Scan remaining EdgeTX telemetry slots (0..63)
   for id = 0, 63 do
     local info = getFieldInfo(id)
     if info and info.name and info.name ~= "" then
-      -- Include telemetry sensors (typically id >= 200 or unit > 0)
       if not seen[info.name] and (id >= 150 or (info.unit and info.unit > 0)) then
         sensorList[#sensorList + 1] = info.name
         seen[info.name] = true
@@ -118,7 +114,6 @@ local function refreshSensors()
     end
   end
 
-  -- Ensure configured sources remain selectable even if sensor is offline
   for g = 1, 4 do
     local s = gauges[g].src
     if s and s ~= "" and not seen[s] then
@@ -188,10 +183,10 @@ local function updateTelemetry()
     demoTick = (demoTick + 1) % 360
     local phase = degToRad(demoTick * 3)
     local wave = 0.5 + 0.5 * math.sin(phase)
-    gauges[1].val = math.floor(2400 + wave * 24100)               -- 2,400 .. 26,500 RPM
-    gauges[2].val = roundVal(3.2 + wave * 61.8, 1)                -- 3.2 .. 65.0 A
-    gauges[3].val = roundVal(12.4 - wave * 1.6, 1)                -- 12.4 .. 10.8 V (sag under load)
-    gauges[4].val = math.floor(34 + wave * 48)                    -- 34 .. 82 C
+    gauges[1].val = math.floor(2400 + wave * 24100)
+    gauges[2].val = roundVal(3.2 + wave * 61.8, 1)
+    gauges[3].val = roundVal(12.4 - wave * 1.6, 1)
+    gauges[4].val = math.floor(34 + wave * 48)
     return
   end
 
@@ -203,7 +198,6 @@ local function updateTelemetry()
         gauges[g].val = roundVal(raw, gauges[g].prec)
       end
     else
-      -- Re-try lookup in case sensor was discovered after script boot
       local src = gauges[g].src
       if src and src ~= "None" then
         local info = getFieldInfo(src)
@@ -223,7 +217,6 @@ end
 -- Custom Automotive HMI Drawing Primitives (128x64 Monochrome)
 -- ============================================================================
 
--- Draw circular arc from startDeg to endDeg (clockwise, screen coords)
 local function drawArc(cx, cy, r, startDeg, endDeg, stepDeg)
   local prevX, prevY = nil, nil
   for deg = startDeg, endDeg, stepDeg do
@@ -237,7 +230,6 @@ local function drawArc(cx, cy, r, startDeg, endDeg, stepDeg)
     end
     prevX, prevY = x, y
   end
-  -- Ensure exact end point
   local endRad = degToRad(endDeg)
   local ex = math.floor(cx + r * math.cos(endRad) + 0.5)
   local ey = math.floor(cy + r * math.sin(endRad) + 0.5)
@@ -246,12 +238,10 @@ local function drawArc(cx, cy, r, startDeg, endDeg, stepDeg)
   end
 end
 
--- Format compact center readout for main circular dials
 local function formatDialValue(g)
   local v = g.val
   if g.key == "RPM" then
     if v >= 10000 then
-      -- e.g. 18450 -> "18.5k"
       local k = math.floor(v / 100 + 0.5) / 10
       return string.format("%.1fk", k)
     else
@@ -266,37 +256,30 @@ local function formatDialValue(g)
   end
 end
 
--- Draw a full automotive circular gauge with fixed scale, ticks, moving needle,
--- and centered digital readout box
 local function drawCircularGauge(cx, cy, r, g, warnHigh)
-  local startDeg = 150   -- 7:30 position
-  local sweepDeg = 240   -- clockwise to 4:30 position (390 deg)
+  local startDeg = 150
+  local sweepDeg = 240
   local endDeg   = startDeg + sweepDeg
 
-  -- Normalized ratio 0..1
   local span = g.max - g.min
   local ratio = 0
   if span > 0 then
     ratio = clamp((g.val - g.min) / span, 0, 1)
   end
 
-  -- 1. Outer bezel arc & subtle inner track arc
   drawArc(cx, cy, r, startDeg, endDeg, 10)
 
-  -- Active progress arc (thickened rim up to current needle position)
   if ratio > 0.01 then
     local activeEnd = startDeg + math.floor(ratio * sweepDeg + 0.5)
     drawArc(cx, cy, r - 1, startDeg, activeEnd, 10)
   end
 
-  -- 2. Fixed scale tick marks (8 intervals = 9 major ticks)
   local numTicks = 8
   for i = 0, numTicks do
     local tDeg = startDeg + (i * sweepDeg) / numTicks
     local rad = degToRad(tDeg)
     local cosA = math.cos(rad)
     local sinA = math.sin(rad)
-    -- Redline / high-load zone ticks (last 2 segments) are slightly longer
     local tickLen = (i >= numTicks - 1) and 4 or 3
     local x1 = math.floor(cx + (r - 1) * cosA + 0.5)
     local y1 = math.floor(cy + (r - 1) * sinA + 0.5)
@@ -305,7 +288,6 @@ local function drawCircularGauge(cx, cy, r, g, warnHigh)
     lcd.drawLine(x1, y1, x2, y2, SOLID, FORCE)
   end
 
-  -- 3. Moving Needle (drawn from inner readout halo out to scale ticks)
   local needleDeg = startDeg + ratio * sweepDeg
   local nRad = degToRad(needleDeg)
   local nCos = math.cos(nRad)
@@ -315,12 +297,10 @@ local function drawCircularGauge(cx, cy, r, g, warnHigh)
   local nx2 = math.floor(cx + (r - 4) * nCos + 0.5)
   local ny2 = math.floor(cy + (r - 4) * nSin + 0.5)
   lcd.drawLine(nx1, ny1, nx2, ny2, SOLID, FORCE)
-  -- Thicken needle base slightly for high contrast on monochrome LCD
   local px = math.floor(-nSin + 0.5)
   local py = math.floor(nCos + 0.5)
   lcd.drawLine(nx1 + px, ny1 + py, math.floor(cx + (r - 8) * nCos + 0.5), math.floor(cy + (r - 8) * nSin + 0.5), SOLID, FORCE)
 
-  -- 4. Center Digital Readout Box (clear pill in middle of dial)
   local txt = formatDialValue(g)
   local boxW = (#txt * 5) + 4
   if boxW < 22 then boxW = 22 end
@@ -329,7 +309,6 @@ local function drawCircularGauge(cx, cy, r, g, warnHigh)
   local bx = cx - math.floor(boxW / 2)
   local by = cy - 4
 
-  -- Erase background behind digital readout so needle never obscures digits
   lcd.drawFilledRectangle(bx, by, boxW, boxH, ERASE)
   lcd.drawRectangle(bx, by, boxW, boxH, SOLID)
 
@@ -341,18 +320,14 @@ local function drawCircularGauge(cx, cy, r, g, warnHigh)
   local tx = cx - math.floor((#txt * 5) / 2) + 1
   lcd.drawText(tx, by + 2, txt, textFlags)
 
-  -- 5. Gauge Title in bottom open wedge of the 240-deg automotive dial
   local lbl = g.label
   local lx = cx - math.floor((#lbl * 5) / 2) + 1
   lcd.drawText(lx, cy + r - 8, lbl, SMLSIZE)
 end
 
--- Draw compact automotive segmented horizontal bar card (for Voltage & Temp)
 local function drawSideBarCard(x, y, w, h, g, warnLow, warnHigh)
-  -- Outer modern card frame
   lcd.drawRectangle(x, y, w, h, SOLID)
 
-  -- Header label bar (inverted micro-header)
   local isAlert = (warnLow and g.val <= g.min) or (warnHigh and g.val >= g.max)
   if isAlert then
     lcd.drawFilledRectangle(x + 1, y + 1, w - 2, 7, FORCE)
@@ -362,7 +337,6 @@ local function drawSideBarCard(x, y, w, h, g, warnLow, warnHigh)
     lcd.drawLine(x + 1, y + 8, x + w - 2, y + 8, DOTTED, FORCE)
   end
 
-  -- Digital numeric readout + unit
   local valStr
   if g.prec == 1 then
     valStr = string.format("%.1f%s", g.val, g.unit)
@@ -371,7 +345,6 @@ local function drawSideBarCard(x, y, w, h, g, warnLow, warnHigh)
   end
   lcd.drawText(x + 2, y + 11, valStr, SMLSIZE)
 
-  -- 5-segment automotive bar graph at bottom of card
   local barX = x + 2
   local barY = y + h - 8
   local barW = w - 4
@@ -390,7 +363,6 @@ local function drawSideBarCard(x, y, w, h, g, warnLow, warnHigh)
     lcd.drawFilledRectangle(barX + 1, barY + 1, fillW, barH - 2, FORCE)
   end
 
-  -- Draw segment dividers every 4 pixels for modern automotive bar look
   for sx = barX + 4, barX + barW - 3, 4 do
     lcd.drawLine(sx, barY + 1, sx, barY + barH - 2, SOLID, ERASE)
   end
@@ -403,7 +375,6 @@ end
 local function drawDashboard()
   lcd.clear()
 
-  -- Top-left micro brand / setup trigger badge (x=0..25, y=0..6)
   if dashFocus then
     lcd.drawFilledRectangle(0, 0, 22, 7, FORCE)
     lcd.drawText(2, 1, "SET", SMLSIZE + INVERS)
@@ -411,14 +382,9 @@ local function drawDashboard()
     lcd.drawText(1, 1, demoMode and "DEMO" or "ESC32", SMLSIZE)
   end
 
-  -- Primary Left Circular Dial: RPM (cx=26, cy=33, r=25)
   drawCircularGauge(26, 33, 25, gauges[1], true)
-
-  -- Primary Center Circular Dial: Current / Amps (cx=76, cy=33, r=24)
   drawCircularGauge(76, 33, 24, gauges[2], true)
 
-  -- Right Secondary Automotive Cards: Voltage (top) & Temp (bottom)
-  -- x=102..127 (width 26px), each card height 31px
   drawSideBarCard(102, 0,  26, 31, gauges[3], true, false)
   drawSideBarCard(102, 33, 26, 31, gauges[4], false, true)
 end
@@ -426,21 +392,6 @@ end
 -- ============================================================================
 -- Screen 2: Telemetry Source & Min/Max Setup Screen
 -- ============================================================================
--- Rows layout (14 rows total, 6 visible rows at a time on 64px height):
---  1: RPM  Source
---  2: RPM  Min
---  3: RPM  Max
---  4: AMP  Source
---  5: AMP  Min
---  6: AMP  Max
---  7: VOLT Source
---  8: VOLT Min
---  9: VOLT Max
--- 10: TEMP Source
--- 11: TEMP Min
--- 12: TEMP Max
--- 13: Demo Mode (OFF / ON)
--- 14: [SAVE & EXIT]
 
 local TOTAL_ROWS = 14
 local VISIBLE_ROWS = 6
@@ -448,7 +399,7 @@ local VISIBLE_ROWS = 6
 local function getRowInfo(row)
   if row <= 12 then
     local gIdx = math.floor((row - 1) / 3) + 1
-    local field = ((row - 1) % 3) + 1  -- 1=Src, 2=Min, 3=Max
+    local field = ((row - 1) % 3) + 1
     local g = gauges[gIdx]
     if field == 1 then
       local live = ""
@@ -511,12 +462,10 @@ end
 local function drawSetup()
   lcd.clear()
 
-  -- Top Header Bar
   lcd.drawFilledRectangle(0, 0, 128, 9, FORCE)
   lcd.drawText(2, 1, "ESC32 DASH SETUP", SMLSIZE + INVERS)
   lcd.drawText(104, 1, string.format("%02d/%02d", setupRow, TOTAL_ROWS), SMLSIZE + INVERS)
 
-  -- Ensure scroll window keeps setupRow visible
   if setupRow < setupScroll + 1 then
     setupScroll = setupRow - 1
   elseif setupRow > setupScroll + VISIBLE_ROWS then
@@ -545,7 +494,6 @@ local function drawSetup()
     end
   end
 
-  -- Right-side scrollbar track
   lcd.drawLine(126, 10, 126, 63, DOTTED, FORCE)
   local thumbH = math.max(6, math.floor((VISIBLE_ROWS / TOTAL_ROWS) * 53))
   local thumbY = 10 + math.floor(((setupRow - 1) / (TOTAL_ROWS - 1)) * (53 - thumbH))
@@ -570,7 +518,6 @@ local function run(event)
   updateTelemetry()
 
   if mode == "DASH" then
-    -- Enter Setup via Enter-Long, Menu key, or clicking highlighted [SET] badge
     if event == EVT_VIRTUAL_ENTER_LONG or event == EVT_VIRTUAL_MENU then
       refreshSensors()
       mode = "SETUP"
